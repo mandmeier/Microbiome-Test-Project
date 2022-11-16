@@ -1,0 +1,474 @@
+---
+title: "Microbiome-Test-Project"
+author: "Michael A. Meier"
+date: "1/15/2022"
+output:
+  word_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+# load required packages
+library("tidyverse")
+library("FactoMineR")
+library("factoextra")
+library("lme4")
+```
+
+
+
+
+## Intro questions
+
+### 1) Explain the advantages and disadvantages of 16S sequencing and Whole Genome Shotgun metagenomic sequencing. 
+
+
+16S amplicon sequencing targets the variable regions (V1-V9) of the bacterial 16S rRNA gene. As microbes in a community sample can be distinguished based on the amplicon sequence, this provides a rapid and cost-effective way to estimate the relative abundance of distinct microbes in a sample. One downside is that the 16S rRNA gene is only about 1.5 kb long, and most analyses target a subset or only one variable region. Precise identification of microbial taxa based short reads is often not possible, because even distantly related microbial groups may have almost identical sequences, whereas in other cases closely related groups may show high variability in particular regions of the 16S rRNA gene Furthermore, the PCR step involved in amplicon sequencing is a source of errors that can introduce point mutations through miscopying of DNA as well as chimaeric sequences, none of which are of biological origin.
+
+
+Whole Genome Shotgun metagenomic sequencing sequences all DNA in a sample. While this approach more time consuming and costly than 16S sequencing, the main advantage is that functional predictions about the microbiome can be made pased on the presence/absence of protein coding genes. Given that whole genomic information is sequenced, it is possible to reach higher taxonomic resolution of microbial groups than by relying on 16S sequences. However, it can be challenging to reconstruct bacterial genomes from community samples, especially in samples with high diversity.
+
+
+### 2) What is the difference between Operational Taxonomic Units (OTUs) and Amplicon Sequence Variants (ASVs)? 
+
+OTUs are artificial bins of 16S sequences, in which sequences are grouped by sequence similarity (commonly 97% or 99% identity within groups). This approach was originally proposed to limit the problems of possible DNA amplification and sequencing errors, and inconclusive taxonomic annotation based on short reads (see 1). While OTUs provide a standardized way to define microbial groups in a community, the same OTUs are often difficult to reproduce between experiments, or when adding additional sequences to an existing dataset, as the grouping of sequences may change depending on the initial set of sequences. Furthermore, OTUs may be difficult to interpret as they may or may not correspond to biologically distinct actors within a microbial community. As I have observed in my own [research](https://journals.asm.org/doi/full/10.1128/AEM.03132-20), subgroups of microbes within a single OTU may show different and even opposite responses to experimental treatments. 
+These limitations together with improved methods of sequencing quality control suggested the direct use of ASVs, i.e. unaltered 16S sequences derived from amplicon sequencing. One  advantage of ASVs is that they are unambiguous and the very same ASVs can be identified in subsequent experiments. However, the danger of using variants that arose due to sequencing errors still persists, and diligent data filtering is required to remove ASVs with low representation.
+
+
+
+### 3) Briefly describe how would one go about doing functional analysis based on the 16S microbiome data and what would be the main limitations of such analysis?
+
+Functional analysis of microbial communities aims to establish the mechanisms by which individual community members respond to treatments and influence the host phenotype.
+
+The first challenge is to define these "community members". The goal is to cluster 16S sequences into biologically meaningful microbial groups that are functionally and behaviorally distinct actors in the microbial community. As outlined above, a main limitation is that 16S sequenceing data alone is often insufficient to reach adequate taxonomic resolution with confidence, OTUs are difficult to interpret, and resolution at the ASV level may be too high to be practical.
+
+I propose to use experimental data in conjunction with 16S sequence information to group ASVs at low taxonomic ranks with better confidence. In a recent [experiment](https://www.biorxiv.org/content/10.1101/2021.11.01.466815v1) I looked at the change in abundance of each individual ASV in response to experimental factors, and I would then cluster ASVs that show consistent behavior across a range of measurements (overall abundance in the dataset, increase/decrease in response to treatments or depending on sample type), the premise being that functionally similar individual microbes will be similarly affected by experimental and environmental factors.
+
+Once meaningful community members are defined, the next step will be to investigate the function of each microbial group. The limitation here is that metabolic capabilities cannot be directly inferred from 16S microbiome data.
+
+Taking advantage of ever growing microbial genome databases, it is possible to reconstruct a metagenome from a list of microbes identified through 16S sequencing. I suggest using [PICRUSt2](https://huttenhower.sph.harvard.edu/picrust/), which has recently been released towards this end. This preliminary analysis may be sufficient to narrow down the list of microbial community members to a list of candidates that may have a hand in producing a given host phenotype (e.g. capability to produce selected metabolites).
+
+
+## General Microbiome Analysis
+
+
+
+### 1)	What is the difference between PCA and PCoA?
+
+Principal Component Analysis is a form of ordination analysis with the aim of reducing the dimensionality of a dataset into principle components, i.e the most relevant summary statistics derived from the measurement of multiple variables. On a 2D PCA plot, the distance between individual samples is plotted (how distant or how different samples are from one another along the first two dimensions). There are different ways to calculate this distance. In PCA, the euclidean distance is used (essentially the pythagorean theorem for n dimensions). Apart from euclidean distance, there are other ways to calculate distances between samples that are popular in microbial community analysis such as Jaccard, Bray-Curtis or UniFrac, which also takes into account the phylogeny of ASVs. These methods are summarized as Principal Coordinates Analysis PCoA.
+
+
+
+### 2a)	Normalize the microbial counts and run PCA on the microbiome data.
+
+
+```{r}
+
+test_microbial_abundance <- read_delim("test_microbial_abundance.txt", delim = "\t")
+
+
+# create n x p ASV table
+# for normalization use log transformed relative abundance
+asvtab <- test_microbial_abundance %>%
+  pivot_wider(names_from = asv_id, values_from = asv_count) %>%
+  replace(is.na(.), 0) %>% ## replace missing ASVs in each sample with zero
+  mutate_if(is.numeric, function(x) x+1) %>% # add pseudocount
+  pivot_longer(cols = starts_with("asv_"), names_to = "asv_id", values_to = "asv_count") %>%
+  group_by(sampleid) %>%
+  mutate(total_obs = sum(asv_count)) %>% 
+  mutate(logrel = log(asv_count/total_obs)) %>% # calculate log relative abundance
+  dplyr::select(-total_obs, -asv_count, -region) %>%
+  pivot_wider(names_from = asv_id, values_from = logrel) %>%
+  column_to_rownames(var = "sampleid")
+    
+
+# run PCA
+
+res_pca <- PCA(asvtab, scale.unit = FALSE, ncp = 5, graph = FALSE)
+
+res_pca
+```
+
+### 2b) Generate a 2D PCA plot with the first two principal components, color points by the geographical location (region column).
+
+
+```{r}
+
+coords <- data.frame(res_pca$ind$coord)
+
+plot_data <- coords %>%
+  rownames_to_column(var = "sampleid") %>%
+  left_join(unique(test_microbial_abundance[, c("sampleid", "region")]))
+
+xlab <- paste0("PC1 [", round(res_pca$eig[1, c("percentage of variance")], 2),"%]" )
+ylab <- paste0("PC2 [", round(res_pca$eig[2, c("percentage of variance")], 2),"%]" )
+
+
+pca_plot <- ggplot(plot_data, aes(x = Dim.1, y = Dim.2, color = region)) +
+  geom_point() +
+  xlab(xlab) +
+  ylab(ylab) +
+  theme_bw()
+
+pca_plot
+
+
+
+```
+
+
+
+### 2c)	What are the top 5 microbes (in terms of ASV IDs) that contribute the most to the first two principal components?
+
+
+```{r}
+
+## get ASV contributions 
+asv_contributions <- res_pca$var$contrib
+
+## plot top 5 ASV contributions using library factoextra
+
+fviz_contrib(res_pca, choice = "var", axes = 1, top = 5, ggtheme = theme_classic()) +
+  ggtitle("Top 5 ASVs contributing to PC1")
+
+fviz_contrib(res_pca, choice = "var", axes = 2, top = 5, ggtheme = theme_classic()) +
+  ggtitle("Top 5 ASVs contributing to PC2")
+
+
+```
+
+### 3) Find ASV IDs associated with BMI, adjusted for age and gender, using a method of your choice (briefly explain why you used that method) and show a list of the top 5 most significantly associated ASV IDs.
+
+Since there are multiple variables in the dataset to control for (age, gender, region), I choose to try a modeling / variance partitioning approach, which will measure the effects of all factors in one fell swoop.
+
+Another way would be to divide the samples into two gropus with high BMI (>25) and low BMI (<25) and look at differential abundance of each ASV between both groups.
+
+
+### For some samples, the data for one or more phenotyping variables is missing. Explain why/how you dealt with this missing data in the subsequent analyses.
+
+There are generally two ways to deal with missing data. Either the samples with missing data are excluded from the analysis, or missing values can be imputed. In our case BMI data is missing from some samples. Since there is no obvious pattern to the missing data (e.g. BMI missing from all China samples), I could replace missing values with the mean BMI for all females or males, respectively, or with a mean BMI specific to region and gender if there is a difference.
+For simplicity, and since only 70/840 (8.3%) of samples have missing BMI data, I choose to simply exclude them.
+
+
+
+```{r}
+
+# prepare data
+
+asv_data <- asvtab %>%
+  rownames_to_column( var = "sampleid") #%>%
+  #filter(!(startswith(sampleid, "tanzania")))
+
+test_phenotypes <- read_delim("test_phenotypes.txt", delim = "\t")
+
+
+phenotype_data <- test_phenotypes %>%
+  dplyr::select(sampleid, age, gender, bmi, region) %>%
+  filter(!(is.na(bmi))) %>%
+  group_by(gender, region) %>%
+  mutate(rep = paste0("rep", row_number()))
+
+
+test_data <- phenotype_data %>%
+  left_join(asv_data, by = "sampleid")
+
+
+
+## function to build lmer model using experimental factors
+get_fit <- function(dat, y){
+  formula <- as.formula(paste(y, "~ (1|bmi) + (1|age) + (1|gender) + (1|region) + (1|rep)"))
+  fit <- lmer(data = dat, formula)
+  return(fit)
+}
+
+
+## define columns that hold asv data
+cols <- colnames(test_data)[grepl("asv_", colnames(test_data))]
+
+## data frame to hold results
+df <- data_frame(grp =c("bmi", "age", "gender", "region", "rep", "residual"))
+
+## for each asv find portion of variance explained by each factor
+for (y in cols){
+  #print(paste(y, as.character(which(cols == y)), "out of", as.character(length(cols))))
+  fit <- get_fit(test_data, y)
+  vc <- as.data.frame(lme4::VarCorr(fit))
+  vc[, y] <- round(vc$vcov/sum(vc$vcov)*100, 8) # calculate portion of total variance in %
+  vc <- vc[, c("grp", y)]
+  df <- left_join(df, vc, by = "grp")
+}
+
+pcvar <- as.data.frame(t(df[, -1]))
+colnames(pcvar) <- df$grp
+pcvar <- rownames_to_column(pcvar, var = "asv_id")
+
+
+## top 5 asv ids most significantly associated with bmi (i.e. largest portion of variance explained by bmi)
+
+head(arrange(pcvar, -bmi), 5)
+
+
+```
+
+
+
+
+## Microbial-metabolite associations
+
+
+
+```{r}
+
+mm_microbial_abundances <- read_delim("mm_microbial_abundances.txt", delim = "\t")
+mm_metabolite_values <- read_delim("mm_metabolite_values.txt", delim = "\t")
+# save for faster loading next time
+#save(mm_metabolite_values, file = "cache/mm_metabolite_values.rda")
+```
+
+
+
+### 1)	What are the potential problems of using linear regression to microbe-metabolite associations?
+
+linear regression assumes there is a straight line (linear) relationship between microbe abundance and metabolite values. This may or may not be the case. linear regression is sensitive to outliers (because of squared distances to regression line), which could be a potential problem. Lastly, linear regression requires independent data, which means the metabolite value or microbe abundance of one sample must have nothing to do with the value of another. I don't know where the samples in mm_metabolite_values.txt and mm_microbial_abundances.txt come from, but if as in the first example they are taken from patients in different demographic groups (China female, China male, USA female, USA male), they would not be independent.
+
+
+
+### 2)	What could be some of the approaches alternative to linear regression to find metabolites potentially produced by microbes? (Do not need to run them, just describe.)
+
+Other forms of regression such as nonlinear regression or Bayesian regression models. Machine learning approaches: e.g. [ MelonnPan](https://www.nature.com/articles/s41467-019-10927-1) uses a model trained on samples for which both sequencing data and experimentally measured metabolite abundances are available to predict metabolic profiles of a microbiome sample or [MMVEC](https://www.nature.com/articles/s41592-019-0616-3), which uses neural networks to estimate the probability that a metabolite is present given the presence of a specific microbe. Make use of metabolic profiles derived from microbial cultures: A [recent study](https://www.nature.com/articles/s41586-021-03707-9#auth-Justin_L_-Sonnenburg) characterized the metabolic profile of 178 gut microorganism strains using a library of 833 metabolites.
+
+
+### 3)	In a typical dataset, there may be many microbes and many metabolites so the number of all possible combinations might be too large to run in a reasonable time. Typically, not every combination needs to be tested either. Use some meaningful way of selecting a subset metabolites and microbes to run a reduced number of regressions.
+
+
+```{r}
+
+# Do PCA on metabolites, select top metabolites affecting top PCs
+
+metabolites <- mm_metabolite_values
+
+metabolite_table <- metabolites %>%
+  pivot_wider(names_from = mtb_id, values_from = mtb_value) %>%
+  #replace(is.na(.), 0) %>%
+  column_to_rownames(var = "sampleid")
+
+# run PCA
+
+res_pca <- PCA(metabolite_table, scale.unit = FALSE, ncp = 50, graph = FALSE)
+
+
+#save(res_pca, file = "cache/res_pca_metabolites.rda")
+
+
+head(res_pca$eig, 32)
+
+## the first 32 PCs explain > 99% of total variance
+
+```
+
+```{r}
+
+## get ASV contributions 
+metabolite_contributions <- data.frame(res_pca$var$contrib)
+
+#for first 32 PCs select top 100 metabolites contributing to these PCs
+top_metabolites <- c()
+npcs <- 32
+n <- 10
+
+for (i in 1:npcs){
+  
+  topn <- rownames(head(metabolite_contributions[order(-metabolite_contributions[, i]),], n))
+  
+  top_metabolites <- c(top_metabolites, topn)
+}
+
+top_metabolites <- unique(top_metabolites)
+
+## selected 113 top metabolites for further analysis 
+top_metabolites
+
+#save(top_metabolites, file = "cache/top_metabolites.rda")
+
+```
+
+
+
+
+```{r}
+
+# For ASVs I apply an abundance filter
+
+microbes <- mm_microbial_abundances
+
+
+total_obs <- microbes %>%
+  group_by(asv_id) %>%
+  tally(name = "total_obs")
+
+
+# select ASVs with at least 2000 observations
+
+top_asvs <- filter(total_obs, total_obs >= 2000)$asv_id
+
+## selected 126 top ASVs for further analysis 
+top_asvs
+
+#save(top_asvs, file = "cache/top_asvs.rda")
+
+
+total_obs_plot <- ggplot(total_obs, aes(x = reorder(asv_id, -total_obs), y = total_obs)) +
+  geom_bar(stat = "identity") +
+  ggtitle("select ASVs with > 2000 observations") +
+  xlab("ASVs ranked by total observations") +
+  geom_hline( yintercept = 2000, linetype="dashed", color = "darkred") +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+                    
+total_obs_plot
+
+```
+
+
+### 4)	Write a code to run these regressions on your laptop or desktop computer and report the top 10 microbial-metabolite hits (in terms of ASV IDs and MTB IDs), including the p-values and confidence intervals for the effect size.
+
+
+
+```{r}
+
+## linear regression for 126 ASVs and 113 metabolites
+
+
+# prepare data
+
+top_mm_metabolite_values <- filter(mm_metabolite_values, mtb_id %in% top_metabolites)
+
+#save(top_mm_metabolite_values, file = "cache/top_mm_metabolite_values.rda")
+
+top_mm_microbial_abundances <- filter(mm_microbial_abundances, asv_id %in% top_asvs)
+## convert ASV counts to log transformed relative abundance
+top_mm_microbial_abundances <- top_mm_microbial_abundances %>%
+  pivot_wider(names_from = asv_id, values_from = asv_count) %>%
+  replace(is.na(.), 0) %>% ## replace missing ASVs in each sample with zero
+  mutate_if(is.numeric, function(x) x+1) %>% # add pseudocount
+  pivot_longer(cols = starts_with("asv_"), names_to = "asv_id", values_to = "asv_count") %>%
+  group_by(sampleid) %>%
+  mutate(total_obs = sum(asv_count)) %>% 
+  mutate(logrel = log(asv_count/total_obs)) %>% # calculate log relative abundance
+  dplyr::select(asv_id, sampleid, logrel)
+
+#save(top_mm_microbial_abundances, file = "cache/top_mm_microbial_abundances.rda")
+
+
+## regression
+
+
+## function to get data for asv/metabolite pair
+get_data <- function(asv, metabolite){
+  
+  asvdat <- top_mm_microbial_abundances %>%
+    filter(asv_id == asv) %>%
+    dplyr::select(sampleid, logrel)
+    
+  mtbdat <- top_mm_metabolite_values %>%
+    filter(mtb_id == metabolite) %>%
+    dplyr::select(sampleid, mtb_value)
+  
+  dat <- left_join(asvdat, mtbdat, by = "sampleid") %>%
+    filter(!is.na(mtb_value)) %>%
+    #mutate(mtb_value = log(mtb_value)) %>% # log transform metabolite value
+    filter(logrel >= -8) # set minimum ASV abundance
+  
+  return(dat)
+}
+
+
+## function to run linear regression
+run_lin_reg <- function(asv, metabolite){
+  dat <- get_data(asv, metabolite)
+  fit <- lm(mtb_value ~ logrel, data = dat)
+  
+  comparison <- paste0(asv,"X", metabolite)
+  p <- summary(fit)$coefficients[2,4]
+  r <- cor(dat$logrel, dat$mtb_value)
+  confint <- confint(fit, 'logrel', level=0.95)
+
+  values <- c(comparison, asv, metabolite, r, p, confint[1], confint[2])
+  return(values)
+
+}
+
+
+## collect results in data frame
+reg_results <- data.frame(matrix(ncol = 7, nrow = 0))
+
+#counter <- 0
+
+## run all 126x113 (14238) comparisons
+
+for (asv in top_asvs){
+  for (mtb in top_metabolites){
+    res <- run_lin_reg(asv, mtb)
+    reg_results <- rbind(reg_results, res)
+    #counter <- counter + 1
+    #print(counter)
+  }
+}
+
+colnames(reg_results) <- c("comparison", "asv_id", "mtb_id", "r", "p", "conf2.5", "conf97.5")
+
+reg_results$r <- as.numeric(reg_results$r)
+reg_results$p <- as.numeric(reg_results$p)
+reg_results$conf2.5 <- as.numeric(reg_results$conf2.5)
+reg_results$conf97.5 <- as.numeric(reg_results$conf97.5)
+
+#save(reg_results, file = "cache/reg_results.rda")
+
+
+# adjust p-values for multiple comparisons, using Benjamini & Hochberg method
+reg_results$p_adj <- p.adjust(reg_results$p, method = "BH", n = length(reg_results$p))
+
+
+# plot correlations and p values
+# I like to plot the correlation r as well to see if a relationship is positive or negative
+correlation_plot <- ggplot(reg_results, aes(x = r, y= -log10(p_adj))) +
+  geom_point() +
+  theme_bw() +
+  ggtitle("correlation of ASV abundance with metabolite values") +
+  xlab("correlation coefficient [r]")
+
+correlation_plot
+
+```
+
+```{r}
+
+# report top 10 microbial-metabolite hits
+
+top10 <- reg_results %>%
+  arrange(p_adj) %>%
+  dplyr::select("comparison", "p_adj", "conf2.5", "conf97.5", "r") %>%
+  head(10)
+
+top10
+
+# mtb_119312 and mtb_134213 seem to be of interest!
+
+
+```
+
+### 5)	Briefly describe few ways to how to adjust p-values when we test large number of hypotheses and the advantages or disadvantages of adjusting p-values in such manner. 
+
+For large numbers of comparisons/hypotheses, some associations are expected to be significant purely by chance. p-values are adjusted to avoid such false positives. The simplest method to adjust p-values for large numbers of comparisons/hypotheses is Bonferroni correction in which the p-values are multiplied by the number of comparisons. However, especially for very large numbers of comparisons, this may push most (if not all) p_values over the significance level, leading to false negative discoveries. Less stringent methods have been proposed. A popular approach is Benjamini & Hochberg, which takes into account the ranking of all p-values and reduces false positives, but also minimises false negatives. Additional methods include Holm, Hochberg, Hommel, Benjamini & Yekutieli, and others. The point is to be skeptical about discoveries made through multiple comparisons, and to verify associations with independent experiments.
+
+
+
+
+
